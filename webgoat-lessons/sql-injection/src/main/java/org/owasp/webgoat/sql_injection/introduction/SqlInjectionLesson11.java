@@ -1,87 +1,112 @@
-package org.owasp.webgoat;
+/*
+ * This file is part of WebGoat, an Open Web Application Security Project utility. For details, please see http://www.owasp.org/
+ *
+ * Copyright (c) 2002 - 2019 Bruce Mayhew
+ *
+ * This program is free software; you can redistribute it and/or modify it under the terms of the
+ * GNU General Public License as published by the Free Software Foundation; either version 2 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+ * even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with this program; if
+ * not, write to the Free Software Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ * 02111-1307, USA.
+ *
+ * Getting Source ==============
+ *
+ * Source for this application is maintained at https://github.com/WebGoat/WebGoat, a repository for free software projects.
+ */
 
-import java.util.HashMap;
-import java.util.Map;
+package org.owasp.webgoat.sql_injection.introduction;
 
-import org.junit.jupiter.api.Test;
+import org.owasp.webgoat.assignments.AssignmentEndpoint;
+import org.owasp.webgoat.assignments.AssignmentHints;
+import org.owasp.webgoat.assignments.AttackResult;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.bind.annotation.RestController;
 
-public class SqlInjectionLessonTest extends IntegrationTest {
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 
-    public static final String sql_2 = "select department from employees where last_name='Franco'";
-    public static final String sql_3 = "update employees set department='Sales' where last_name='Barnett'";
-    public static final String sql_4_drop = "alter table employees drop column phone";
-    public static final String sql_4_add = "alter table employees add column phone varchar(20)";
-    public static final String sql_5 = "grant select on grant_rights to unauthorized_user";
-    public static final String sql_9_account = " ' ";
-    public static final String sql_9_operator = "or";
-    public static final String sql_9_injection = "'1'='1";
-    public static final String sql_10_login_count = "2";
-    public static final String sql_10_userid = "1 or 1=1";
+import static org.hsqldb.jdbc.JDBCResultSet.CONCUR_UPDATABLE;
+import static org.hsqldb.jdbc.JDBCResultSet.TYPE_SCROLL_SENSITIVE;
 
-    public static final String sql_11_a = "Smith' or '1' = '1";
-    public static final String sql_11_b = "3SL99A'  or '1'='1";
+@RestController
+@AssignmentHints(value = {"SqlStringInjectionHint.11.1", "SqlStringInjectionHint.11.2", "SqlStringInjectionHint.11.3", "SqlStringInjectionHint.11.4", "SqlStringInjectionHint.11.5"})
+public class SqlInjectionLesson11 extends AssignmentEndpoint {
 
-    public static final String sql_12_a = "Smith";
-    public static final String sql_12_b = "3SL99A' ; update employees set salary= '100000' where last_name='Smith";
+    private final DataSource dataSource;
 
-    public static final String sql_13 = "%update% '; drop table access_log ; --'";
-
-    @Test
-    public void runTests() {
-        startLesson("SqlInjection");
-
-        Map<String, Object> params = new HashMap<>();
-        params.clear();
-        params.put("query", sql_2);
-        checkAssignment(url("/WebGoat/SqlInjection/attack2"), params, true);
-
-        params.clear();
-        params.put("query", sql_3);
-        checkAssignment(url("/WebGoat/SqlInjection/attack3"), params, true);
-
-        params.clear();
-        params.put("query", sql_4_add);
-        checkAssignment(url("/WebGoat/SqlInjection/attack4"), params, true);
-
-        params.clear();
-        params.put("query", sql_4_drop);
-        checkAssignment(url("/WebGoat/SqlInjection/attack4"), params, false);
-
-        params.clear();
-        params.put("query", sql_5);
-        checkAssignment(url("/WebGoat/SqlInjection/attack5"), params, true);
-
-        params.clear();
-        params.put("operator", sql_9_operator);
-        params.put("account", sql_9_account);
-        params.put("injection", sql_9_injection);
-        checkAssignment(url("/WebGoat/SqlInjection/assignment5a"), params, true);
-
-        params.clear();
-        params.put("login_count", sql_10_login_count);
-        params.put("userid", sql_10_userid);
-        checkAssignment(url("/WebGoat/SqlInjection/assignment5b"), params, true);
-
-        params.clear();
-        params.put("name", sql_11_a);
-        params.put("auth_tan", sql_11_b);
-        checkAssignment(url("/WebGoat/SqlInjection/attack8"), params, true);
-
-        params.clear();
-        params.put("name", sql_12_a);
-        params.put("auth_tan", sql_12_b);
-        checkAssignment(url("/WebGoat/SqlInjection/attack9"), params, true);
-
-        params.clear();
-        params.put("action_string", sql_13);
-        checkAssignment(url("/WebGoat/SqlInjection/attack10"), params, true);
-
-        params.clear();
-        params.put("name", sql_12_a);
-        params.put("auth_tan", sql_12_b);
-        checkAssignment(url("/WebGoat/SqlInjection/attack11"), params, true);
-
-        checkResults("/SqlInjection/");
-
+    public SqlInjectionLesson11(DataSource dataSource) {
+        this.dataSource = dataSource;
     }
+
+    @PostMapping("/SqlInjection/attack11")
+    @ResponseBody
+    public AttackResult completed(@RequestParam String name, @RequestParam String auth_tan) {
+        return injectableQueryIntegrity(name, auth_tan);
+    }
+
+    protected AttackResult injectableQueryIntegrity(String name, String auth_tan) {
+        StringBuffer output = new StringBuffer();
+        String query = "SELECT * FROM employees WHERE last_name = '" + name + "' AND auth_tan = '" + auth_tan + "'";
+        try (Connection connection = dataSource.getConnection()) {
+            try {
+                Statement statement = connection.createStatement(TYPE_SCROLL_SENSITIVE, CONCUR_UPDATABLE);
+                SqlInjectionLesson8.log(connection, query);
+                ResultSet results = statement.executeQuery(query);
+                var test = results.getRow() != 0;
+                if (results.getStatement() != null) {
+                    if (results.first()) {
+                        output.append(SqlInjectionLesson8.generateTable(results));
+                    } else {
+                        // no results
+                        return failed(this).feedback("sql-injection.8.no.results").build();
+                    }
+                }
+            } catch (SQLException e) {
+                System.err.println(e.getMessage());
+                return failed(this).feedback("sql-injection.error").output("<br><span class='feedback-negative'>" + e.getMessage() + "</span>").build();
+            }
+
+            return checkSalaryRanking(connection, output);
+
+        } catch (Exception e) {
+            System.err.println(e.getMessage());
+            return failed(this).feedback("sql-injection.error").output("<br><span class='feedback-negative'>" + e.getMessage() + "</span>").build();
+        }
+    }
+
+    private AttackResult checkSalaryRanking(Connection connection, StringBuffer output) {
+        try {
+            String query = "SELECT * FROM employees ORDER BY salary DESC";
+            try (Statement statement = connection.createStatement(TYPE_SCROLL_SENSITIVE, CONCUR_UPDATABLE);
+            ) {
+                ResultSet results = statement.executeQuery(query);
+
+                results.first();
+                // user completes lesson if John Smith is the first in the list
+                if ((results.getString(2).equals("John")) && (results.getString(3).equals("Smith"))) {
+                    output.append(SqlInjectionLesson8.generateTable(results));
+                    return success(this).feedback("sql-injection.11.success").output(output.toString()).build();
+                } else {
+                    return failed(this).feedback("sql-injection.11.one").output(output.toString()).build();
+                }
+            }
+        } catch (SQLException e) {
+            return failed(this).feedback("sql-injection.error").output("<br><span class='feedback-negative'>" + e.getMessage() + "</span>").build();
+        }
+    }
+
 }
+
+
+/** Re-run checks **/
